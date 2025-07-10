@@ -190,5 +190,132 @@ class QualityControlService:
             r'localhost|'  # localhost...
             r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'  # ...or ip
             r'(?::\d+)?'  # optional port
-            r'(?:/?|[/?]\S+)', re.IGNORECASE)
-        return re.match(url_pattern, url)
+            r'(?:/?|[/?]\S+)$', re.IGNORECASE)
+        
+        return url_pattern.match(url) is not None
+    
+    def monitor_campaign_performance(self, campaign_id: str) -> Dict:
+        """
+        Monitor campaign performance and trigger alerts for quality issues.
+        """
+        campaign = self.db.query(Campaign).filter(Campaign.id == campaign_id).first()
+        if not campaign:
+            return {"status": "error", "message": "Campaign not found"}
+        
+        # Get recent performance metrics
+        end_date = datetime.utcnow()
+        start_date = end_date - timedelta(days=7)
+        
+        metrics = self.db.query(AdMetrics).filter(
+            AdMetrics.campaign_id == campaign_id,
+            AdMetrics.date >= start_date,
+            AdMetrics.date <= end_date
+        ).all()
+        
+        if not metrics:
+            return {"status": "no_data", "message": "No recent performance data"}
+        
+        # Calculate performance indicators
+        total_impressions = sum(m.impressions for m in metrics)
+        total_clicks = sum(m.clicks for m in metrics)
+        total_spend = sum(m.spend for m in metrics)
+        
+        ctr = (total_clicks / total_impressions * 100) if total_impressions > 0 else 0
+        avg_cpc = (total_spend / total_clicks) if total_clicks > 0 else 0
+        
+        alerts = []
+        
+        # Performance threshold checks
+        if ctr < settings.MIN_CTR_THRESHOLD:
+            alerts.append({
+                "type": "low_ctr",
+                "severity": "high",
+                "message": f"CTR {ctr:.2f}% below threshold {settings.MIN_CTR_THRESHOLD}%",
+                "recommendation": "Review ad creative and targeting"
+            })
+        
+        if avg_cpc > campaign.budget * 0.1:  # CPC > 10% of total budget
+            alerts.append({
+                "type": "high_cpc",
+                "severity": "medium",
+                "message": f"High CPC ${avg_cpc:.2f} detected",
+                "recommendation": "Optimize targeting and bidding strategy"
+            })
+        
+        # Budget pacing check
+        days_elapsed = (datetime.utcnow() - campaign.start_date).days + 1
+        expected_spend = (campaign.budget / 
+                         ((campaign.end_date - campaign.start_date).days + 1)) * days_elapsed
+        
+        if total_spend > expected_spend * 1.2:  # 20% over expected
+            alerts.append({
+                "type": "budget_overspend",
+                "severity": "critical",
+                "message": f"Spending ${total_spend:.2f} vs expected ${expected_spend:.2f}",
+                "recommendation": "Reduce daily budget or pause campaign"
+            })
+        
+        # Auto-pause if critical issues
+        if any(alert["severity"] == "critical" for alert in alerts):
+            if settings.AUTO_PAUSE_LOW_PERFORMANCE:
+                campaign.status = "paused"
+                self.db.commit()
+                alerts.append({
+                    "type": "auto_pause",
+                    "severity": "critical",
+                    "message": "Campaign automatically paused due to critical issues",
+                    "recommendation": "Review and resolve issues before reactivating"
+                })
+        
+        return {
+            "campaign_id": campaign_id,
+            "performance_summary": {
+                "ctr": ctr,
+                "avg_cpc": avg_cpc,
+                "total_spend": total_spend,
+                "budget_utilization": (total_spend / campaign.budget * 100)
+            },
+            "alerts": alerts,
+            "status": "paused" if campaign.status == "paused" else "active"
+        }
+    
+    def get_quality_report(self, start_date: datetime, end_date: datetime) -> Dict:
+        """Generate comprehensive quality control report."""
+        # Get all ads reviewed in the period
+        ads = self.db.query(Ad).filter(
+            Ad.created_at >= start_date,
+            Ad.created_at <= end_date
+        ).all()
+        
+        total_ads = len(ads)
+        if total_ads == 0:
+            return {"message": "No ads found in the specified period"}
+        
+        approved = sum(1 for ad in ads if ad.approval_status == "approved")
+        rejected = sum(1 for ad in ads if ad.approval_status == "rejected")
+        pending = sum(1 for ad in ads if ad.approval_status == "pending")
+        needs_review = sum(1 for ad in ads if ad.approval_status == "needs_review")
+        
+        avg_quality_score = sum(ad.quality_score or 0 for ad in ads) / total_ads
+        
+        return {
+            "period": {
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat()
+            },
+            "summary": {
+                "total_ads_reviewed": total_ads,
+                "approved": approved,
+                "rejected": rejected,
+                "pending": pending,
+                "needs_review": needs_review,
+                "approval_rate": (approved / total_ads * 100) if total_ads > 0 else 0,
+                "average_quality_score": avg_quality_score
+            },
+            "quality_distribution": {
+                "excellent": sum(1 for ad in ads if (ad.quality_score or 0) >= 4.5),
+                "good": sum(1 for ad in ads if 3.5 <= (ad.quality_score or 0) < 4.5),
+                "fair": sum(1 for ad in ads if 2.5 <= (ad.quality_score or 0) < 3.5),
+                "poor": sum(1 for ad in ads if (ad.quality_score or 0) < 2.5)
+            }
+        }

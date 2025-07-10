@@ -264,19 +264,108 @@ def validate_geographic_targeting(geographic: Dict) -> List[str]:
                 if not isinstance(city, str) or len(city.strip()) == 0:
                     errors.append("City names must be non-empty strings")
     
-    return errorss
+    return errors
 
-# def validate_advertiser_data(advertiser_data: Dict) -> Tuple[bool, List[str]]:
-#     """Validate advertiser data."""
-#     errors = []
+def validate_advertiser_data(advertiser_data: Dict) -> Tuple[bool, List[str]]:
+    """Validate advertiser data."""
+    errors = []
     
-#     # Required fields
-#     required_fields = ["name", "company_name", "contact_email"]
-#     for field in required_fields:
-#         if field not in advertiser_data or not advertiser_data[field]:
-#             errors.append(f"Missing required field: {field}")
+    # Required fields
+    required_fields = ["name", "company_name", "contact_email"]
+    for field in required_fields:
+        if field not in advertiser_data or not advertiser_data[field]:
+            errors.append(f"Missing required field: {field}")
     
-#     # Email validation
-#     if "contact_email" in advertiser_data:
-#         email = advertiser_data["contact_email"]
-#         email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}#'
+    # Email validation
+    if "contact_email" in advertiser_data:
+        email = advertiser_data["contact_email"]
+        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        if not re.match(email_pattern, email):
+            errors.append("Invalid email format")
+    
+    # Phone validation
+    if "contact_phone" in advertiser_data and advertiser_data["contact_phone"]:
+        phone = advertiser_data["contact_phone"]
+        phone_pattern = r'^\+?1?-?\.?\s?\(?(\d{3})\)?[-\.\s]?(\d{3})[-\.\s]?(\d{4})$'
+        if not re.match(phone_pattern, phone):
+            errors.append("Invalid phone number format")
+    
+    # Monthly spend validation
+    if "monthly_ad_spend" in advertiser_data and advertiser_data["monthly_ad_spend"]:
+        try:
+            spend = float(advertiser_data["monthly_ad_spend"])
+            if spend < 0:
+                errors.append("Monthly ad spend cannot be negative")
+            if spend > 50000000:  # $50M monthly limit
+                errors.append("Monthly ad spend exceeds maximum limit")
+        except (ValueError, TypeError):
+            errors.append("Monthly ad spend must be a valid number")
+    
+    # Tier validation
+    if "tier" in advertiser_data:
+        tier = advertiser_data["tier"]
+        valid_tiers = ["basic", "standard", "premium"]
+        if tier not in valid_tiers:
+            errors.append(f"Invalid tier. Must be one of: {valid_tiers}")
+    
+    return len(errors) == 0, errors
+
+def validate_file_upload(file_data: Dict) -> Tuple[bool, List[str]]:
+    """Validate uploaded file data."""
+    errors = []
+    
+    # File size validation
+    max_size = 10 * 1024 * 1024  # 10MB
+    if "size" in file_data:
+        if file_data["size"] > max_size:
+            errors.append(f"File size {file_data['size']} exceeds maximum {max_size} bytes")
+    
+    # File type validation
+    allowed_types = [
+        "image/jpeg", "image/png", "image/gif", "image/webp",
+        "video/mp4", "video/webm", "video/quicktime",
+        "application/pdf"
+    ]
+    
+    if "mime_type" in file_data:
+        if file_data["mime_type"] not in allowed_types:
+            errors.append(f"File type {file_data['mime_type']} not allowed")
+    
+    # Filename validation
+    if "filename" in file_data:
+        filename = file_data["filename"]
+        if not re.match(r'^[a-zA-Z0-9._-]+$', filename):
+            errors.append("Filename contains invalid characters")
+        
+        if len(filename) > 255:
+            errors.append("Filename too long")
+    
+    return len(errors) == 0, errors
+
+def sanitize_input(text: str) -> str:
+    """Sanitize user input to prevent injection attacks."""
+    if not isinstance(text, str):
+        return ""
+    
+    # Remove potentially dangerous characters
+    sanitized = re.sub(r'[<>"\'\&]', '', text)
+    
+    # Trim whitespace
+    sanitized = sanitized.strip()
+    
+    return sanitized
+
+def validate_api_key(api_key: str) -> bool:
+    """Validate API key format."""
+    if not api_key:
+        return False
+    
+    # API key should be alphanumeric with dashes/underscores
+    if not re.match(r'^[a-zA-Z0-9_-]+$', api_key):
+        return False
+    
+    # Should be reasonable length
+    if len(api_key) < 20 or len(api_key) > 100:
+        return False
+    
+    return True
